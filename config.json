@@ -1,0 +1,31 @@
+{
+    "switches": [
+        {
+            "name": "Main-Switch",
+            "ip": "10.1.100.77",
+            "community": "public",
+            "snmp_version": "2c",
+            "exclude_ports": ["3"],
+            "exclude_macs": ["00-00-00-00-00-00"]
+        },
+        {
+            "name": "Floor-1-Switch",
+            "ip": "10.1.100.78",
+            "community": "public",
+            "snmp_version": "2c",
+            "exclude_ports": [],
+            "exclude_macs": []
+        }
+    ],
+    "settings": {
+        "subnets": [
+            "10.1.100.0/24",
+            "10.1.101.0/24",
+            "10.1.102.0/24",
+            "10.1.103.0/24"
+        ],
+        "arp_scan_interval": 120,
+        "snmp_timeout": 30,
+        "cache_ttl": 60
+    }
+}
