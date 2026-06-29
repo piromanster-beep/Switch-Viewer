@@ -36,7 +36,7 @@ apt update
 apt install -y python3 python3-pip snmp arp-scan
 pip3 install -r requirements.txt
 ```
-#RHEL/CentOS/Fedora:
+# RHEL/CentOS/Fedora:
 
 ```bash
 dnf install -y python3 python3-pip net-snmp-utils arp-scan
