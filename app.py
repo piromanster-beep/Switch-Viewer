@@ -4,6 +4,7 @@ import subprocess
 import re
 import json
 import time
+import threading
 
 app = Flask(__name__)
 SNMPWALK = "/usr/bin/snmpwalk"
@@ -17,6 +18,15 @@ SETTINGS = CONFIG['settings']
 # ARP cache
 arp_cache = {}
 arp_cache_time = 0
+
+# Поиск с прогрессом
+search_status = {
+    "active": False,
+    "progress": 0,
+    "total": 0,
+    "results": [],
+    "message": ""
+}
 
 def get_arp_table():
     """Get full ARP table using arp-scan."""
@@ -52,13 +62,15 @@ def get_switch_data(switch):
     exclude_ports = switch.get('exclude_ports', [])
     exclude_macs = switch.get('exclude_macs', [])
     
-    # 1. Get MAC table
-    mac_walk = subprocess.run(
-        [SNMPWALK, "-v", "2c", "-c", community, ip, "1.3.6.1.2.1.17.7.1.2.2.1"],
-        capture_output=True, text=True, timeout=SETTINGS['snmp_timeout']
-    ).stdout.splitlines()
+    try:
+        mac_walk = subprocess.run(
+            [SNMPWALK, "-v", "2c", "-c", community, ip, "1.3.6.1.2.1.17.7.1.2.2.1"],
+            capture_output=True, text=True, timeout=SETTINGS['snmp_timeout']
+        ).stdout.splitlines()
+    except subprocess.TimeoutExpired:
+        print(f"Timeout: {ip}")
+        return []
 
-    # 2. Get port names
     port_walk = subprocess.run(
         [SNMPWALK, "-v", "2c", "-c", community, ip, "1.3.6.1.2.1.31.1.1.1.1"],
         capture_output=True, text=True, timeout=SETTINGS['snmp_timeout']
@@ -70,7 +82,6 @@ def get_switch_data(switch):
         if m:
             port_names[m.group(1)] = m.group(2)
 
-    # 3. Parse MAC addresses
     all_entries = []
     for line in mac_walk:
         if 'INTEGER:' not in line:
@@ -110,6 +121,41 @@ def get_switch_data(switch):
 
     return all_entries
 
+def search_all_switches(query):
+    """Perform search across all switches with progress tracking."""
+    global search_status
+    
+    search_status["active"] = True
+    search_status["progress"] = 0
+    search_status["total"] = len(SWITCHES)
+    search_status["results"] = []
+    search_status["message"] = "Starting search..."
+    
+    results = []
+    arp = get_arp_table()
+    
+    for i, switch in enumerate(SWITCHES):
+        search_status["message"] = f"Searching {switch['name']}..."
+        search_status["progress"] = i + 1
+        
+        entries = get_switch_data(switch)
+        for entry in entries:
+            ip = arp.get(entry["mac_raw"], "Not found")
+            if query in entry["mac"] or query in ip:
+                results.append({
+                    "switch": switch['name'],
+                    "port": entry["port"],
+                    "mac": entry["mac"],
+                    "ip": ip
+                })
+        
+        time.sleep(0.1)  # Small delay for UI update
+    
+    search_status["results"] = results
+    search_status["message"] = f"Found {len(results)} entries"
+    search_status["active"] = False
+    return results
+
 @app.route('/')
 def index():
     return render_template('index.html', switches=SWITCHES)
@@ -141,28 +187,30 @@ def get_switch(switch_id):
         "data": result
     })
 
-@app.route('/api/search')
+@app.route('/api/search', methods=['POST'])
 def search():
-    query = request.args.get('q', '').strip().upper()
+    query = request.json.get('query', '').strip().upper()
     if not query:
         return jsonify({"error": "Enter search query"}), 400
+    
+    # Start search in background thread
+    thread = threading.Thread(target=search_all_switches, args=(query,))
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({"status": "started"})
 
-    results = []
-    for switch in SWITCHES:
-        entries = get_switch_data(switch)
-        arp = get_arp_table()
-        
-        for entry in entries:
-            ip = arp.get(entry["mac_raw"], "Not found")
-            if query in entry["mac"] or query in ip:
-                results.append({
-                    "switch": switch['name'],
-                    "port": entry["port"],
-                    "mac": entry["mac"],
-                    "ip": ip
-                })
-
-    return jsonify({"results": results, "count": len(results)})
+@app.route('/api/search/progress')
+def search_progress():
+    """Return current search progress."""
+    global search_status
+    return jsonify({
+        "active": search_status["active"],
+        "progress": search_status["progress"],
+        "total": search_status["total"],
+        "message": search_status["message"],
+        "results": search_status["results"] if not search_status["active"] else []
+    })
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
