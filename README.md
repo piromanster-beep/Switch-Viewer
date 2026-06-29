@@ -22,8 +22,8 @@ A lightweight web tool to view MAC address tables from SNMP-enabled switches and
 
 # Quick Install (Linux)
 
-`bash
+```bash
 git clone https://github.com/piromanster-beep/Switch-Viewer.git
 cd switch-viewer
 sudo ./install.sh
-`
+````
