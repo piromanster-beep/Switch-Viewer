@@ -11,6 +11,10 @@ A lightweight web tool to view MAC address tables from SNMP-enabled switches and
 - Supports multiple switches via config file
 - Lightweight, no database required
 
+
+![screenshot](Screenshot.png)
+
+
 # Installation
 
 # Requirements
