@@ -1,0 +1,17 @@
+cat > /root/switch-viewer/.gitignore <<'EOF'
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+venv/
+.venv/
+env/
+.env/
+*.swp
+*.swo
+.DS_Store
+config.local.json
+EOF
