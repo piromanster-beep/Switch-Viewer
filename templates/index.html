@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Switch Viewer</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1400px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { margin-top: 0; color: #333; }
+        .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; align-items: center; }
+        select, input, button { padding: 8px 12px; font-size: 14px; border: 1px solid #ddd; border-radius: 4px; }
+        button { background: #007bff; color: white; border: none; cursor: pointer; }
+        button:hover { background: #0069d9; }
+        .search-section { margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px; }
+        .search-section input { width: 300px; }
+        .search-section button { background: #28a745; }
+        .search-section button:hover { background: #218838; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; font-size: 14px; }
+        th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; }
+        th { background: #f2f2f2; cursor: pointer; }
+        th:hover { background: #e5e5e5; }
+        tr:nth-child(even) { background: #f9f9f9; }
+        .loading { color: #888; padding: 20px; text-align: center; }
+        .error { color: red; padding: 10px; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+        .badge-found { background: #d4edda; color: #155724; }
+        .badge-notfound { background: #f8d7da; color: #721c24; }
+        .port-btn { padding: 4px 10px; border: 1px solid #ddd; border-radius: 4px; background: white; cursor: pointer; font-size: 12px; }
+        .port-btn.active { background: #007bff; color: white; border-color: #007bff; }
+        .port-btn:hover { background: #e5e5e5; }
+        .port-btn.active:hover { background: #0069d9; }
+        #filteredPorts { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0; }
+        .info { color: #666; font-size: 13px; }
+        .refresh-btn { background: #6c757d; }
+        .refresh-btn:hover { background: #5a6268; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>📡 Switch Viewer</h1>
+    
+    <div class="toolbar">
+        <select id="switchSelect">
+            <option value="">Select switch...</option>
+            {% for switch in switches %}
+            <option value="{{ loop.index0 }}">{{ switch.name }} ({{ switch.ip }})</option>
+            {% endfor %}
+        </select>
+        <button onclick="loadSwitch()">Show</button>
+        <button onclick="loadAllSwitches()" class="refresh-btn">Show All</button>
+        <button onclick="refreshData()" class="refresh-btn" style="background:#17a2b8;">Refresh</button>
+    </div>
+    
+    <div class="search-section">
+        <input type="text" id="searchInput" placeholder="Search by MAC or IP (e.g., 00-04-76 or 10.1.100)">
+        <button onclick="search()">🔍 Search</button>
+        <span id="searchResultCount" class="info"></span>
+    </div>
+    
+    <div id="portsContainer"></div>
+    <div id="result"><p class="loading">Select a switch and click "Show"</p></div>
+</div>
+
+<script>
+let currentData = [];
+let currentPorts = [];
+let currentSwitchName = '';
+
+function loadSwitch() {
+    const select = document.getElementById('switchSelect');
+    const idx = select.value;
+    if (!idx) return;
+    
+    const resultDiv = document.getElementById('result');
+    const portsDiv = document.getElementById('portsContainer');
+    resultDiv.innerHTML = '<p class="loading">Loading...</p>';
+    portsDiv.innerHTML = '';
+    currentSwitchName = select.options[select.selectedIndex].text;
+    
+    fetch(`/api/switch/${idx}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                resultDiv.innerHTML = `<p class="error">Error: ${data.error}</p>`;
+                return;
+            }
+            currentData = data.data;
+            currentPorts = data.ports;
+            renderPorts(currentPorts);
+            renderTable(currentData);
+            document.getElementById('searchResultCount').textContent = `Total: ${currentData.length} entries`;
+        })
+        .catch(err => {
+            resultDiv.innerHTML = `<p class="error">Error: ${err}</p>`;
+        });
+}
+
+function loadAllSwitches() {
+    const resultDiv = document.getElementById('result');
+    const portsDiv = document.getElementById('portsContainer');
+    resultDiv.innerHTML = '<p class="loading">Loading all switches...</p>';
+    portsDiv.innerHTML = '';
+    
+    const select = document.getElementById('switchSelect');
+    const options = select.options;
+    let allData = [];
+    let promises = [];
+    
+    for (let i = 1; i < options.length; i++) {
+        const idx = options[i].value;
+        const switchName = options[i].text;
+        promises.push(
+            fetch(`/api/switch/${idx}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) return [];
+                    return data.data.map(item => ({
+                        ...item,
+                        switch: switchName
+                    }));
+                })
+        );
+    }
+    
+    Promise.all(promises).then(results => {
+        allData = results.flat();
+        currentData = allData;
+        currentPorts = [];
+        renderTable(allData, true);
+        document.getElementById('searchResultCount').textContent = `Total: ${allData.length} entries`;
+    });
+}
+
+function refreshData() {
+    const select = document.getElementById('switchSelect');
+    if (select.value) {
+        loadSwitch();
+    } else {
+        loadAllSwitches();
+    }
+}
+
+function renderPorts(ports) {
+    const div = document.getElementById('portsContainer');
+    if (!ports || ports.length === 0) {
+        div.innerHTML = '';
+        return;
+    }
+    let html = '<div><strong>Ports:</strong> <span class="info">(click to filter)</span></div><div id="filteredPorts">';
+    html += `<button class="port-btn active" data-port="all" onclick="filterByPort('all')">All</button>`;
+    ports.forEach(p => {
+        html += `<button class="port-btn" data-port="${p}" onclick="filterByPort('${p}')">${p}</button>`;
+    });
+    html += '</div>';
+    div.innerHTML = html;
+}
+
+function filterByPort(port) {
+    document.querySelectorAll('.port-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.port === port);
+    });
+    let filtered = currentData;
+    if (port !== 'all') {
+        filtered = currentData.filter(item => item.port === port);
+    }
+    renderTable(filtered);
+}
+
+function renderTable(data, showSwitch = false) {
+    const div = document.getElementById('result');
+    if (!data || data.length === 0) {
+        div.innerHTML = '<p class="info">No data</p>';
+        return;
+    }
+    let html = `<table><tr>
+        ${showSwitch ? '<th>Switch</th>' : ''}
+        <th>Port</th>
+        <th>MAC</th>
+        <th>IP</th>
+    </tr>`;
+    data.forEach(item => {
+        const ipClass = item.ip === 'Not found' ? 'badge-notfound' : 'badge-found';
+        html += `<tr>
+            ${showSwitch ? `<td>${item.switch || ''}</td>` : ''}
+            <td>${item.port}</td>
+            <td>${item.mac}</td>
+            <td><span class="badge ${ipClass}">${item.ip}</span></td>
+        </tr>`;
+    });
+    html += '</table>';
+    html += `<p class="info">Total entries: ${data.length}</p>`;
+    div.innerHTML = html;
+}
+
+function search() {
+    const query = document.getElementById('searchInput').value.trim();
+    if (!query) {
+        document.getElementById('searchResultCount').textContent = 'Enter search term';
+        return;
+    }
+    document.getElementById('result').innerHTML = '<p class="loading">Searching...</p>';
+    fetch(`/api/search?q=${encodeURIComponent(query)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                document.getElementById('result').innerHTML = `<p class="error">${data.error}</p>`;
+                return;
+            }
+            document.getElementById('searchResultCount').textContent = `Found: ${data.count}`;
+            currentData = data.results;
+            renderTable(data.results, true);
+        })
+        .catch(err => {
+            document.getElementById('result').innerHTML = `<p class="error">Error: ${err}</p>`;
+        });
+}
+
+document.getElementById('searchInput').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') search();
+});
+</script>
+</body>
+</html>
