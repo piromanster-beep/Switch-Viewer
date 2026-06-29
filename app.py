@@ -15,11 +15,15 @@ with open('config.json', 'r') as f:
 SWITCHES = CONFIG['switches']
 SETTINGS = CONFIG['settings']
 
+# Кэш для MAC-таблиц
+mac_cache = {}
+mac_cache_time = {}
+
 # ARP cache
 arp_cache = {}
 arp_cache_time = 0
 
-# Поиск с прогрессом
+# Search status
 search_status = {
     "active": False,
     "progress": 0,
@@ -29,7 +33,7 @@ search_status = {
 }
 
 def get_arp_table():
-    """Get full ARP table using arp-scan."""
+    """Get full ARP table using arp-scan (cached)."""
     global arp_cache, arp_cache_time
     
     now = time.time()
@@ -55,12 +59,24 @@ def get_arp_table():
     arp_cache_time = now
     return arp
 
-def get_switch_data(switch):
-    """Get MAC table from switch."""
+def get_switch_data(switch, force_refresh=False):
+    """Get MAC table from switch (cached)."""
     ip = switch['ip']
     community = switch['community']
     exclude_ports = switch.get('exclude_ports', [])
     exclude_macs = switch.get('exclude_macs', [])
+    
+    cache_key = f"{ip}_{community}"
+    now = time.time()
+    
+    # Проверяем кэш
+    if not force_refresh and cache_key in mac_cache:
+        cache_age = now - mac_cache_time.get(cache_key, 0)
+        if cache_age < SETTINGS.get('cache_ttl', 60):
+            print(f"Cache hit: {ip} (age: {cache_age:.0f}s)")
+            return mac_cache[cache_key]
+    
+    print(f"Cache miss: {ip}, fetching...")
     
     try:
         mac_walk = subprocess.run(
@@ -119,6 +135,9 @@ def get_switch_data(switch):
                     "port": port_name
                 })
 
+    # Сохраняем в кэш
+    mac_cache[cache_key] = all_entries
+    mac_cache_time[cache_key] = now
     return all_entries
 
 def search_all_switches(query):
@@ -149,7 +168,7 @@ def search_all_switches(query):
                     "ip": ip
                 })
         
-        time.sleep(0.1)  # Small delay for UI update
+        time.sleep(0.1)
     
     search_status["results"] = results
     search_status["message"] = f"Found {len(results)} entries"
@@ -166,7 +185,8 @@ def get_switch(switch_id):
         return jsonify({"error": "Switch not found"}), 404
 
     switch = SWITCHES[switch_id]
-    entries = get_switch_data(switch)
+    force_refresh = request.args.get('refresh', 'false').lower() == 'true'
+    entries = get_switch_data(switch, force_refresh)
     arp = get_arp_table()
     
     result = []
@@ -193,7 +213,6 @@ def search():
     if not query:
         return jsonify({"error": "Enter search query"}), 400
     
-    # Start search in background thread
     thread = threading.Thread(target=search_all_switches, args=(query,))
     thread.daemon = True
     thread.start()
@@ -202,7 +221,6 @@ def search():
 
 @app.route('/api/search/progress')
 def search_progress():
-    """Return current search progress."""
     global search_status
     return jsonify({
         "active": search_status["active"],
@@ -211,6 +229,16 @@ def search_progress():
         "message": search_status["message"],
         "results": search_status["results"] if not search_status["active"] else []
     })
+
+@app.route('/api/cache/clear', methods=['POST'])
+def clear_cache():
+    """Clear all caches."""
+    global mac_cache, mac_cache_time, arp_cache, arp_cache_time
+    mac_cache = {}
+    mac_cache_time = {}
+    arp_cache = {}
+    arp_cache_time = 0
+    return jsonify({"status": "Cache cleared"})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
