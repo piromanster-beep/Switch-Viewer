@@ -35,6 +35,12 @@
         .info { color: #666; font-size: 13px; }
         .refresh-btn { background: #6c757d; }
         .refresh-btn:hover { background: #5a6268; }
+        
+        /* Progress bar */
+        .progress-container { margin: 10px 0; display: none; }
+        .progress-bar { width: 100%; height: 20px; background: #e9ecef; border-radius: 10px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; background: #28a745; transition: width 0.3s ease; width: 0%; }
+        .progress-text { margin-top: 5px; font-size: 12px; color: #666; }
     </style>
 </head>
 <body>
@@ -55,8 +61,16 @@
     
     <div class="search-section">
         <input type="text" id="searchInput" placeholder="Search by MAC or IP (e.g., 00-04-76 or 10.1.100)">
-        <button onclick="search()">🔍 Search</button>
+        <button onclick="startSearch()">🔍 Search All</button>
         <span id="searchResultCount" class="info"></span>
+        
+        <!-- Progress bar -->
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-bar">
+                <div class="progress-bar-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-text" id="progressText">Searching...</div>
+        </div>
     </div>
     
     <div id="portsContainer"></div>
@@ -67,6 +81,7 @@
 let currentData = [];
 let currentPorts = [];
 let currentSwitchName = '';
+let searchInterval = null;
 
 function loadSwitch() {
     const select = document.getElementById('switchSelect');
@@ -194,31 +209,77 @@ function renderTable(data, showSwitch = false) {
     div.innerHTML = html;
 }
 
-function search() {
+function startSearch() {
     const query = document.getElementById('searchInput').value.trim();
     if (!query) {
         document.getElementById('searchResultCount').textContent = 'Enter search term';
         return;
     }
-    document.getElementById('result').innerHTML = '<p class="loading">Searching...</p>';
-    fetch(`/api/search?q=${encodeURIComponent(query)}`)
+    
+    // Show progress bar
+    const progressContainer = document.getElementById('progressContainer');
+    progressContainer.style.display = 'block';
+    document.getElementById('progressFill').style.width = '0%';
+    document.getElementById('progressText').textContent = 'Starting search...';
+    document.getElementById('result').innerHTML = '<p class="loading">Searching all switches...</p>';
+    
+    // Start search
+    fetch('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: query })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            document.getElementById('result').innerHTML = `<p class="error">${data.error}</p>`;
+            progressContainer.style.display = 'none';
+            return;
+        }
+        // Poll for progress
+        if (searchInterval) clearInterval(searchInterval);
+        searchInterval = setInterval(checkSearchProgress, 500);
+    })
+    .catch(err => {
+        document.getElementById('result').innerHTML = `<p class="error">Error: ${err}</p>`;
+        progressContainer.style.display = 'none';
+    });
+}
+
+function checkSearchProgress() {
+    fetch('/api/search/progress')
         .then(response => response.json())
         .then(data => {
-            if (data.error) {
-                document.getElementById('result').innerHTML = `<p class="error">${data.error}</p>`;
-                return;
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            
+            if (data.total > 0) {
+                const percent = Math.round((data.progress / data.total) * 100);
+                progressFill.style.width = `${Math.min(percent, 100)}%`;
             }
-            document.getElementById('searchResultCount').textContent = `Found: ${data.count}`;
-            currentData = data.results;
-            renderTable(data.results, true);
+            
+            progressText.textContent = data.message;
+            
+            if (!data.active) {
+                clearInterval(searchInterval);
+                document.getElementById('progressContainer').style.display = 'none';
+                
+                if (data.results && data.results.length > 0) {
+                    currentData = data.results;
+                    renderTable(data.results, true);
+                    document.getElementById('searchResultCount').textContent = `Found: ${data.results.length}`;
+                } else {
+                    document.getElementById('result').innerHTML = '<p class="info">No results found</p>';
+                }
+            }
         })
         .catch(err => {
-            document.getElementById('result').innerHTML = `<p class="error">Error: ${err}</p>`;
+            console.error('Progress error:', err);
         });
 }
 
 document.getElementById('searchInput').addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') search();
+    if (e.key === 'Enter') startSearch();
 });
 </script>
 </body>
