@@ -5,6 +5,8 @@ import re
 import json
 import time
 import threading
+import csv
+import io
 
 app = Flask(__name__)
 SNMPWALK = "/usr/bin/snmpwalk"
@@ -15,7 +17,7 @@ with open('config.json', 'r') as f:
 SWITCHES = CONFIG['switches']
 SETTINGS = CONFIG['settings']
 
-# Кэш для MAC-таблиц
+# Cache for MAC tables
 mac_cache = {}
 mac_cache_time = {}
 
@@ -69,7 +71,7 @@ def get_switch_data(switch, force_refresh=False):
     cache_key = f"{ip}_{community}"
     now = time.time()
     
-    # Проверяем кэш
+    # Check cache
     if not force_refresh and cache_key in mac_cache:
         cache_age = now - mac_cache_time.get(cache_key, 0)
         if cache_age < SETTINGS.get('cache_ttl', 60):
@@ -135,7 +137,7 @@ def get_switch_data(switch, force_refresh=False):
                     "port": port_name
                 })
 
-    # Сохраняем в кэш
+    # Save to cache
     mac_cache[cache_key] = all_entries
     mac_cache_time[cache_key] = now
     return all_entries
@@ -230,6 +232,33 @@ def search_progress():
         "results": search_status["results"] if not search_status["active"] else []
     })
 
+@app.route('/api/cache/status', methods=['GET'])
+def cache_status():
+    """Return current cache status."""
+    global mac_cache, mac_cache_time, arp_cache, arp_cache_time
+    now = time.time()
+    
+    active_mac_entries = 0
+    oldest_mac_age = None
+    for key, timestamp in mac_cache_time.items():
+        if now - timestamp < SETTINGS.get('cache_ttl', 60):
+            active_mac_entries += 1
+            age = now - timestamp
+            if oldest_mac_age is None or age > oldest_mac_age:
+                oldest_mac_age = age
+    
+    arp_age = now - arp_cache_time if arp_cache_time else None
+    arp_active = arp_age is not None and arp_age < SETTINGS.get('arp_scan_interval', 120)
+    
+    return jsonify({
+        "mac_entries": len(mac_cache),
+        "active_mac_entries": active_mac_entries,
+        "oldest_mac_age": round(oldest_mac_age) if oldest_mac_age else None,
+        "ttl": SETTINGS.get('cache_ttl', 60),
+        "arp_active": arp_active,
+        "arp_age": round(arp_age) if arp_age else None
+    })
+
 @app.route('/api/cache/clear', methods=['POST'])
 def clear_cache():
     """Clear all caches."""
@@ -239,6 +268,56 @@ def clear_cache():
     arp_cache = {}
     arp_cache_time = 0
     return jsonify({"status": "Cache cleared"})
+
+# --- CSV Export ---
+@app.route('/api/switch/<int:switch_id>/csv')
+def export_switch_csv(switch_id):
+    """Export switch data as CSV."""
+    if switch_id < 0 or switch_id >= len(SWITCHES):
+        return jsonify({"error": "Switch not found"}), 404
+
+    switch = SWITCHES[switch_id]
+    force_refresh = request.args.get('refresh', 'false').lower() == 'true'
+    entries = get_switch_data(switch, force_refresh)
+    arp = get_arp_table()
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Port', 'MAC', 'IP'])
+    
+    for entry in entries:
+        ip = arp.get(entry["mac_raw"], "Not found")
+        writer.writerow([entry["port"], entry["mac"], ip])
+    
+    response = app.response_class(
+        response=output.getvalue(),
+        status=200,
+        mimetype='text/csv'
+    )
+    response.headers["Content-Disposition"] = f"attachment; filename={switch['name']}_port-mac-ip.csv"
+    return response
+
+@app.route('/api/export/all')
+def export_all_csv():
+    """Export all switches data as a single CSV."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Switch', 'Port', 'MAC', 'IP'])
+    
+    arp = get_arp_table()
+    for switch in SWITCHES:
+        entries = get_switch_data(switch)
+        for entry in entries:
+            ip = arp.get(entry["mac_raw"], "Not found")
+            writer.writerow([switch['name'], entry["port"], entry["mac"], ip])
+    
+    response = app.response_class(
+        response=output.getvalue(),
+        status=200,
+        mimetype='text/csv'
+    )
+    response.headers["Content-Disposition"] = "attachment; filename=all_switches_port-mac-ip.csv"
+    return response
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
