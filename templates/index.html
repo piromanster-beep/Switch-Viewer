@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -36,11 +37,16 @@
         .refresh-btn { background: #6c757d; }
         .refresh-btn:hover { background: #5a6268; }
         
-        /* Progress bar */
         .progress-container { margin: 10px 0; display: none; }
         .progress-bar { width: 100%; height: 20px; background: #e9ecef; border-radius: 10px; overflow: hidden; }
         .progress-bar-fill { height: 100%; background: #28a745; transition: width 0.3s ease; width: 0%; }
         .progress-text { margin-top: 5px; font-size: 12px; color: #666; }
+
+        .footer { margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; text-align: center; font-size: 13px; color: #888; }
+        .footer a { color: #007bff; text-decoration: none; }
+        .footer a:hover { text-decoration: underline; }
+        .cache-info { font-size: 12px; color: #666; margin-left: 15px; }
+        .export-buttons { margin: 10px 0; display: flex; gap: 10px; flex-wrap: wrap; }
     </style>
 </head>
 <body>
@@ -57,6 +63,8 @@
         <button onclick="loadSwitch()">Show</button>
         <button onclick="loadAllSwitches()" class="refresh-btn">Show All</button>
         <button onclick="refreshData()" class="refresh-btn" style="background:#17a2b8;">Refresh</button>
+        <button onclick="clearCache()" class="refresh-btn" style="background:#dc3545;" title="Clear all cached data">Clear Cache</button>
+        <span id="cacheInfo" class="cache-info">Cache: <span id="cacheStatus">unknown</span></span>
     </div>
     
     <div class="search-section">
@@ -64,7 +72,6 @@
         <button onclick="startSearch()">🔍 Search All</button>
         <span id="searchResultCount" class="info"></span>
         
-        <!-- Progress bar -->
         <div class="progress-container" id="progressContainer">
             <div class="progress-bar">
                 <div class="progress-bar-fill" id="progressFill"></div>
@@ -72,9 +79,25 @@
             <div class="progress-text" id="progressText">Searching...</div>
         </div>
     </div>
+
+    <!-- CSV Export Buttons -->
+    <div class="export-buttons">
+        <button onclick="exportCSV()" style="background: #28a745;">📥 Export Current CSV</button>
+        <button onclick="exportAllCSV()" style="background: #17a2b8;">📥 Export All CSV</button>
+    </div>
     
     <div id="portsContainer"></div>
     <div id="result"><p class="loading">Select a switch and click "Show"</p></div>
+
+    <div class="footer">
+        <p>
+            <a href="https://github.com/piromanster-beep/Switch-Viewer" target="_blank">Switch Viewer</a> 
+            is licensed under the 
+            <a href="https://github.com/piromanster-beep/Switch-Viewer/blob/main/LICENSE" target="_blank">MIT License</a>.
+            <br>Built with ❤️ by 
+            <a href="https://github.com/piromanster-beep" target="_blank">Ivan Karpoukhin</a>.
+        </p>
+    </div>
 </div>
 
 <script>
@@ -83,6 +106,51 @@ let currentPorts = [];
 let currentSwitchName = '';
 let searchInterval = null;
 
+// --- Cache functions ---
+async function updateCacheStatus() {
+    try {
+        const response = await fetch('/api/cache/status');
+        if (!response.ok) throw new Error('Network error');
+        const data = await response.json();
+        document.getElementById('cacheStatus').textContent = 
+            `${data.mac_entries || 0} MAC entries, TTL: ${data.ttl || 'N/A'}s`;
+    } catch (e) {
+        document.getElementById('cacheStatus').textContent = 'offline';
+    }
+}
+
+async function clearCache() {
+    if (!confirm('Clear all cached data? This will force fresh queries on next load.')) return;
+    try {
+        const response = await fetch('/api/cache/clear', { method: 'POST' });
+        if (!response.ok) throw new Error('Network error');
+        const data = await response.json();
+        alert('Cache cleared successfully!');
+        updateCacheStatus();
+        refreshData();
+    } catch (e) {
+        alert('Failed to clear cache: ' + e.message);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', updateCacheStatus);
+
+// --- CSV Export ---
+function exportCSV() {
+    const select = document.getElementById('switchSelect');
+    const idx = select.value;
+    if (!idx) {
+        alert('Select a switch first');
+        return;
+    }
+    window.location.href = `/api/switch/${idx}/csv`;
+}
+
+function exportAllCSV() {
+    window.location.href = '/api/export/all';
+}
+
+// --- Main functions ---
 function loadSwitch() {
     const select = document.getElementById('switchSelect');
     const idx = select.value;
@@ -106,6 +174,7 @@ function loadSwitch() {
             renderPorts(currentPorts);
             renderTable(currentData);
             document.getElementById('searchResultCount').textContent = `Total: ${currentData.length} entries`;
+            updateCacheStatus();
         })
         .catch(err => {
             resultDiv.innerHTML = `<p class="error">Error: ${err}</p>`;
@@ -145,6 +214,7 @@ function loadAllSwitches() {
         currentPorts = [];
         renderTable(allData, true);
         document.getElementById('searchResultCount').textContent = `Total: ${allData.length} entries`;
+        updateCacheStatus();
     });
 }
 
@@ -216,14 +286,12 @@ function startSearch() {
         return;
     }
     
-    // Show progress bar
     const progressContainer = document.getElementById('progressContainer');
     progressContainer.style.display = 'block';
     document.getElementById('progressFill').style.width = '0%';
     document.getElementById('progressText').textContent = 'Starting search...';
     document.getElementById('result').innerHTML = '<p class="loading">Searching all switches...</p>';
     
-    // Start search
     fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -236,7 +304,6 @@ function startSearch() {
             progressContainer.style.display = 'none';
             return;
         }
-        // Poll for progress
         if (searchInterval) clearInterval(searchInterval);
         searchInterval = setInterval(checkSearchProgress, 500);
     })
